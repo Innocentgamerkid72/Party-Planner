@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Party Planner</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="logo">
+      <span class="logo-icon">🎉</span>
+      <span class="logo-text">Party Planner</span>
+    </div>
+    <ul class="nav-links">
+      <li><button class="nav-btn active" data-view="dashboard">📋 Dashboard</button></li>
+      <li><button class="nav-btn" id="nav-create">➕ New Event</button></li>
+    </ul>
+    <div class="sidebar-footer">
+      <p class="sidebar-tip">Plan smarter,<br>party better.</p>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main-content">
+
+    <!-- ── DASHBOARD ── -->
+    <section id="view-dashboard" class="view active">
+      <header class="page-header">
+        <div>
+          <h1>Your Events</h1>
+          <p class="page-subtitle">Pick a category or browse all</p>
+        </div>
+        <button class="btn btn-primary" id="btn-create-event">+ New Event</button>
+      </header>
+
+      <div class="category-filter" id="category-filter">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="birthday">🎂 Birthday</button>
+        <button class="filter-btn" data-filter="christmas">🎄 Christmas</button>
+        <button class="filter-btn" data-filter="funeral">🕊️ Funeral</button>
+        <button class="filter-btn" data-filter="halloween">🎃 Halloween</button>
+        <button class="filter-btn" data-filter="graduation">🎓 Graduation</button>
+        <button class="filter-btn" data-filter="wedding">💒 Wedding</button>
+        <button class="filter-btn" data-filter="anniversary">💖 Anniversary</button>
+        <button class="filter-btn" data-filter="other">🎉 Other</button>
+      </div>
+
+      <div class="events-grid" id="events-grid"></div>
+
+      <div class="empty-state" id="empty-state" style="display:none">
+        <div class="empty-icon">🎈</div>
+        <h2>No events yet!</h2>
+        <p>Create your first event to get started planning.</p>
+        <button class="btn btn-primary" id="empty-create-btn">Create Event</button>
+      </div>
+    </section>
+
+    <!-- ── CREATE / EDIT ── -->
+    <section id="view-create" class="view">
+      <header class="page-header">
+        <div>
+          <button class="btn-back" id="back-from-create">← Back</button>
+          <h1 id="create-title">Create New Event</h1>
+        </div>
+      </header>
+
+      <form class="event-form" id="event-form">
+
+        <div class="form-section">
+          <h2>Event Type</h2>
+          <div class="category-picker" id="category-picker">
+            <label class="category-option" data-category="birthday">
+              <input type="radio" name="category" value="birthday">
+              <span class="category-card"><span class="cat-icon">🎂</span><span class="cat-name">Birthday</span></span>
+            </label>
+            <label class="category-option" data-category="christmas">
+              <input type="radio" name="category" value="christmas">
+              <span class="category-card"><span class="cat-icon">🎄</span><span class="cat-name">Christmas</span></span>
+            </label>
+            <label class="category-option" data-category="funeral">
+              <input type="radio" name="category" value="funeral">
+              <span class="category-card"><span class="cat-icon">🕊️</span><span class="cat-name">Funeral</span></span>
+            </label>
+            <label class="category-option" data-category="halloween">
+              <input type="radio" name="category" value="halloween">
+              <span class="category-card"><span class="cat-icon">🎃</span><span class="cat-name">Halloween</span></span>
+            </label>
+            <label class="category-option" data-category="graduation">
+              <input type="radio" name="category" value="graduation">
+              <span class="category-card"><span class="cat-icon">🎓</span><span class="cat-name">Graduation</span></span>
+            </label>
+            <label class="category-option" data-category="wedding">
+              <input type="radio" name="category" value="wedding">
+              <span class="category-card"><span class="cat-icon">💒</span><span class="cat-name">Wedding</span></span>
+            </label>
+            <label class="category-option" data-category="anniversary">
+              <input type="radio" name="category" value="anniversary">
+              <span class="category-card"><span class="cat-icon">💖</span><span class="cat-name">Anniversary</span></span>
+            </label>
+            <label class="category-option" data-category="other">
+              <input type="radio" name="category" value="other">
+              <span class="category-card"><span class="cat-icon">🎉</span><span class="cat-name">Other</span></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-section">
+          <h2>Event Details</h2>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="event-name">Event Name *</label>
+              <input type="text" id="event-name" placeholder="e.g. Jake's 13th Birthday" required>
+            </div>
+          </div>
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label for="event-date">Date *</label>
+              <input type="date" id="event-date" required>
+            </div>
+            <div class="form-group">
+              <label for="event-time">Time</label>
+              <input type="time" id="event-time">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="event-location">Location</label>
+              <input type="text" id="event-location" placeholder="e.g. Backyard, Community Center">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="event-theme">Theme</label>
+              <input type="text" id="event-theme" placeholder="e.g. Superhero, Beach, Space">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="event-description">Description</label>
+              <textarea id="event-description" placeholder="Add any extra details..."></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" id="cancel-create">Cancel</button>
+          <button type="submit" class="btn btn-primary" id="save-event-btn">Save Event</button>
+        </div>
+
+      </form>
+    </section>
+
+    <!-- ── EVENT DETAIL ── -->
+    <section id="view-event-detail" class="view">
+      <header class="page-header event-detail-header">
+        <div>
+          <button class="btn-back" id="back-to-dashboard">← Back to Events</button>
+          <h1 id="event-detail-title"></h1>
+          <p class="event-detail-meta" id="event-detail-meta"></p>
+        </div>
+        <div class="header-actions">
+          <button class="btn btn-outline" id="btn-edit-event">Edit</button>
+          <button class="btn btn-danger" id="btn-delete-event">Delete</button>
+        </div>
+      </header>
+
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="guests">👥 Guests</button>
+        <button class="tab-btn" data-tab="activities">📅 Schedule</button>
+        <button class="tab-btn" data-tab="notes">📝 Notes</button>
+        <button class="tab-btn" data-tab="simulator">🎭 Simulator</button>
+      </div>
+
+      <!-- GUESTS TAB -->
+      <div class="tab-content" id="tab-guests">
+        <div class="tab-header">
+          <h2>Guest List</h2>
+          <button class="btn btn-primary" id="btn-add-guest">+ Add Guest</button>
+        </div>
+        <div id="guest-stats"></div>
+        <div id="guest-list"></div>
+        <div class="inline-form" id="add-guest-form" style="display:none">
+          <h3>Add Guest</h3>
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label>Name *</label>
+              <input type="text" id="guest-name" placeholder="Guest name">
+            </div>
+            <div class="form-group">
+              <label>Contact</label>
+              <input type="text" id="guest-contact" placeholder="Phone or email">
+            </div>
+          </div>
+          <div class="form-row" style="max-width:200px">
+            <div class="form-group">
+              <label>RSVP Status</label>
+              <select id="guest-rsvp">
+                <option value="pending">Pending</option>
+                <option value="yes">Coming</option>
+                <option value="no">Not Coming</option>
+                <option value="maybe">Maybe</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" id="cancel-add-guest">Cancel</button>
+            <button class="btn btn-primary" id="save-guest">Add Guest</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ACTIVITIES TAB -->
+      <div class="tab-content hidden" id="tab-activities">
+        <div class="tab-header">
+          <h2>Activity Schedule</h2>
+          <button class="btn btn-primary" id="btn-add-activity">+ Add Activity</button>
+        </div>
+        <div id="activity-list"></div>
+        <div class="inline-form" id="add-activity-form" style="display:none">
+          <h3>Add Activity</h3>
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label>Activity Name *</label>
+              <input type="text" id="activity-name" placeholder="e.g. Cake cutting">
+            </div>
+            <div class="form-group">
+              <label>Start Time</label>
+              <input type="time" id="activity-time">
+            </div>
+          </div>
+          <div class="form-row two-col">
+            <div class="form-group">
+              <label>Duration (minutes)</label>
+              <input type="number" id="activity-duration" placeholder="30" min="1">
+            </div>
+            <div class="form-group">
+              <label>Description</label>
+              <input type="text" id="activity-description" placeholder="Optional details">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" id="cancel-add-activity">Cancel</button>
+            <button class="btn btn-primary" id="save-activity">Add Activity</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- NOTES TAB -->
+      <div class="tab-content hidden" id="tab-notes">
+        <div class="tab-header">
+          <h2>Notes Station</h2>
+          <button class="btn btn-primary" id="btn-add-note">+ Add Note</button>
+        </div>
+        <label class="toggle-label" style="margin-bottom:16px; display:flex; align-items:center; gap:8px; cursor:pointer">
+          <input type="checkbox" id="show-hidden-notes">
+          Show hidden notes
+        </label>
+        <div class="notes-grid" id="notes-grid"></div>
+        <div class="inline-form" id="add-note-form" style="display:none">
+          <h3>Add Note</h3>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Title *</label>
+              <input type="text" id="note-title" placeholder="Note title">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Content</label>
+              <textarea id="note-content" placeholder="Write your note here..."></textarea>
+            </div>
+          </div>
+          <div class="form-row two-col">
+            <label class="checkbox-label">
+              <input type="checkbox" id="note-pinned"> Pin this note
+            </label>
+            <label class="checkbox-label">
+              <input type="checkbox" id="note-hidden"> Keep hidden
+            </label>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" id="cancel-add-note">Cancel</button>
+            <button class="btn btn-primary" id="save-note">Add Note</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- SIMULATOR TAB -->
+      <div class="tab-content hidden" id="tab-simulator">
+        <div class="tab-header">
+          <h2>Party Simulator</h2>
+          <button class="btn btn-primary" id="btn-run-simulator">▶ Run Simulation</button>
+        </div>
+        <p class="sim-hint">See a live animated preview of how your party will look!</p>
+        <div class="simulator-layout">
+          <div class="simulator-scene-wrap">
+            <canvas id="sim-canvas"></canvas>
+          </div>
+          <div class="simulator-panels">
+            <div class="sim-panel">
+              <h3>Event Summary</h3>
+              <div id="sim-summary"></div>
+            </div>
+            <div class="sim-panel">
+              <h3>Guest Count</h3>
+              <div id="sim-guests"></div>
+            </div>
+            <div class="sim-panel">
+              <h3>Activity Timeline</h3>
+              <div id="sim-timeline"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+
+<!-- ── CUTSCENE OVERLAY ── -->
+<div id="cutscene" aria-live="assertive">
+  <canvas id="cutscene-canvas"></canvas>
+  <div class="cutscene-msg">
+    <span class="cutscene-icon"></span>
+    <h2 class="cutscene-title"></h2>
+    <p class="cutscene-sub"></p>
+    <button class="cutscene-skip" id="cutscene-skip">Skip</button>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
