@@ -7,7 +7,38 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="app">
+<!-- ── LOGIN SCREEN ── -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-hero">🎉</div>
+    <h1 class="login-title">Party Planner</h1>
+    <p class="login-sub">Plan smarter, party better.</p>
+
+    <div class="login-tabs">
+      <button class="login-tab active" id="tab-signin">Sign In</button>
+      <button class="login-tab" id="tab-signup">Create Account</button>
+    </div>
+
+    <form id="login-form" autocomplete="off">
+      <div class="form-group">
+        <label for="login-username">Username</label>
+        <input type="text" id="login-username" placeholder="Enter your username" autocomplete="username" required>
+      </div>
+      <div class="form-group">
+        <label for="login-password">Password</label>
+        <input type="password" id="login-password" placeholder="Enter your password" autocomplete="current-password" required>
+      </div>
+      <div class="form-group" id="confirm-group" style="display:none">
+        <label for="login-confirm">Confirm Password</label>
+        <input type="password" id="login-confirm" placeholder="Re-enter your password" autocomplete="new-password">
+      </div>
+      <p class="login-error" id="login-error"></p>
+      <button type="submit" class="btn btn-primary login-btn" id="login-submit">Sign In</button>
+    </form>
+  </div>
+</div>
+
+<div id="app" style="display:none">
 
   <!-- Sidebar -->
   <nav class="sidebar">
@@ -20,7 +51,11 @@
       <li><button class="nav-btn" id="nav-create">➕ New Event</button></li>
     </ul>
     <div class="sidebar-footer">
-      <p class="sidebar-tip">Plan smarter,<br>party better.</p>
+      <div class="sidebar-user">
+        <span class="user-avatar" id="sidebar-avatar">?</span>
+        <span class="user-name" id="sidebar-username">Guest</span>
+      </div>
+      <button class="btn-logout" id="btn-logout">↩ Sign Out</button>
     </div>
   </nav>
 

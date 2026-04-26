@@ -2,9 +2,43 @@
    Party Planner — app.js
    ═══════════════════════════════════════════════════════════ */
 
+// ── Auth ────────────────────────────────────────────────────
+let currentUser = null; // set after login
+
+function getAccounts() {
+  return JSON.parse(localStorage.getItem('pp_accounts') || '{}');
+}
+function saveAccounts(a) {
+  localStorage.setItem('pp_accounts', JSON.stringify(a));
+}
+function eventsKey(u) { return 'pp_events_' + u; }
+
+function loginUser(username) {
+  currentUser = username;
+  localStorage.setItem('pp_session', username);
+  state.events = JSON.parse(localStorage.getItem(eventsKey(username)) || '[]');
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('sidebar-username').textContent = username;
+  document.getElementById('sidebar-avatar').textContent   = getInitials(username);
+  renderDashboard();
+}
+
+function logoutUser() {
+  currentUser = null;
+  state.events = []; state.currentEventId = null;
+  localStorage.removeItem('pp_session');
+  stopSimulator();
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('login-screen').style.display = 'flex';
+  // reset login form
+  document.getElementById('login-form').reset();
+  document.getElementById('login-error').textContent = '';
+}
+
 // ── State ──────────────────────────────────────────────────
 const state = {
-  events:         JSON.parse(localStorage.getItem('pp_events') || '[]'),
+  events:         [],   // populated after login
   currentEventId: null,
   simRunning:     false,
   simFrame:       null,
@@ -12,7 +46,8 @@ const state = {
 };
 
 function saveState() {
-  localStorage.setItem('pp_events', JSON.stringify(state.events));
+  if (!currentUser) return;
+  localStorage.setItem(eventsKey(currentUser), JSON.stringify(state.events));
 }
 
 function getCurrentEvent() {
@@ -301,7 +336,7 @@ function addGuest() {
 
 // ── Activities ──────────────────────────────────────────────
 function renderActivities() {
-  const ev  = getCurrentEvent(); if (!ev) return;
+  const ev   = getCurrentEvent(); if (!ev) return;
   const acts = [...(ev.activities || [])].sort((a, b) => (a.time||'').localeCompare(b.time||''));
   const list = document.getElementById('activity-list');
 
@@ -311,18 +346,34 @@ function renderActivities() {
   }
 
   list.innerHTML = acts.map(a => `
-    <div class="activity-item">
-      <div class="activity-time">${a.time || '--:--'}</div>
-      <div class="activity-content">
-        <span class="activity-name">${escHtml(a.name)}</span>
-        ${a.duration ? `<span class="activity-duration">⏱ ${a.duration} min</span>` : ''}
-        ${a.description ? `<p class="activity-desc">${escHtml(a.description)}</p>` : ''}
+    <div class="activity-accordion" data-aid="${a.id}">
+      <button class="acc-header" aria-expanded="false">
+        <span class="acc-time">${a.time || '--:--'}</span>
+        <span class="acc-name">${escHtml(a.name)}</span>
+        ${a.duration ? `<span class="acc-chip">⏱ ${a.duration} min</span>` : ''}
+        <span class="acc-chevron">▾</span>
+      </button>
+      <div class="acc-body">
+        <div class="acc-separator"></div>
+        <p class="acc-desc${a.description ? '' : ' muted'}">${escHtml(a.description || 'No description added.')}</p>
+        <div class="acc-foot">
+          <button class="btn btn-danger btn-sm btn-rm-activity" data-aid="${a.id}">Delete</button>
+        </div>
       </div>
-      <button class="btn-icon btn-rm-activity" data-aid="${a.id}" title="Remove">🗑️</button>
     </div>`).join('');
 
+  // Toggle open/close on header click
+  list.querySelectorAll('.acc-header').forEach(header => {
+    header.addEventListener('click', () => {
+      const card = header.closest('.activity-accordion');
+      const isOpen = card.classList.toggle('open');
+      header.setAttribute('aria-expanded', isOpen);
+    });
+  });
+
   list.querySelectorAll('.btn-rm-activity').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
       ev.activities = ev.activities.filter(a => a.id !== btn.dataset.aid);
       saveState(); renderActivities();
     });
@@ -603,98 +654,483 @@ function playCutscene(category, onDone) {
   csFrame = requestAnimationFrame(tick);
 }
 
-// ── Simulator ────────────────────────────────────────────────
-// Guest "actor" that wanders the canvas
+// ── Simulator — top-down floor-plan (Google Maps style) ──────
+
+// ── Venue themes (colours per event type) ───────────────────
+const VENUE_THEME = {
+  birthday:    { floor:'#FFF8EE', tile:'#FFEFD6', wall:'#9B6B4B', wallEdge:'#C4956A', table:'#C8956A', chair:'#F5CBA7', particle:'confetti' },
+  christmas:   { floor:'#EDF7ED', tile:'#D6EDDB', wall:'#2D5016', wallEdge:'#4A7C28', table:'#6B4226', chair:'#A07040', particle:'snow'     },
+  funeral:     { floor:'#F0F0F0', tile:'#E4E4E4', wall:'#505050', wallEdge:'#787878', table:'#909090', chair:'#C8C8C8', particle:'none'     },
+  halloween:   { floor:'#140800', tile:'#200E00', wall:'#3D1A00', wallEdge:'#6B3000', table:'#4A2000', chair:'#3A1800', particle:'bats'     },
+  graduation:  { floor:'#EFF6FF', tile:'#DBEAFE', wall:'#1E3A8A', wallEdge:'#2563EB', table:'#2563EB', chair:'#93C5FD', particle:'confetti' },
+  wedding:     { floor:'#FFFDE7', tile:'#FFF9C4', wall:'#78350F', wallEdge:'#B45309', table:'#B8902A', chair:'#FDE68A', particle:'petals'   },
+  anniversary: { floor:'#FDF2F8', tile:'#FCE7F3', wall:'#831843', wallEdge:'#BE185D', table:'#BE185D', chair:'#F9A8D4', particle:'hearts'   },
+  other:       { floor:'#F5F3FF', tile:'#EDE9FE', wall:'#3B0764', wallEdge:'#6D28D9', table:'#7C3AED', chair:'#C4B5FD', particle:'confetti' },
+};
+
+// ── Venue layouts (normalised 0–1 coordinates) ───────────────
+const VENUE_LAYOUT = {
+  birthday: {
+    zones:  [
+      { x:.05, y:.05, w:.9,  h:.42, color:'rgba(255,182,193,.14)', label:'Dining Area' },
+      { x:.22, y:.54, w:.56, h:.32, color:'rgba(255,105,180,.18)', label:'Dance Floor' },
+    ],
+    tables: [
+      { type:'round', x:.22, y:.25, r:.085, seats:6 },
+      { type:'round', x:.5,  y:.25, r:.085, seats:6 },
+      { type:'round', x:.78, y:.25, r:.085, seats:6 },
+      { type:'rect',  x:.5,  y:.91, w:.52,  h:.065, label:'Buffet Table' },
+    ],
+    special:[
+      { x:.5,  y:.7,  emoji:'🎂', sz:26, label:'Cake' },
+    ],
+    decos:  [
+      { x:.06, y:.06, emoji:'🎈' }, { x:.94, y:.06, emoji:'🎈' },
+      { x:.06, y:.94, emoji:'🎈' }, { x:.94, y:.94, emoji:'🎈' },
+      { x:.5,  y:.06, emoji:'🎊' },
+    ],
+    door: { side:'bottom', pos:.5 },
+  },
+  christmas: {
+    zones:  [{ x:.04, y:.04, w:.92, h:.88, color:'rgba(167,220,167,.16)', label:'Dining Hall' }],
+    tables: [
+      { type:'rect', x:.5, y:.22, w:.72, h:.07, seats:8, label:'' },
+      { type:'rect', x:.5, y:.5,  w:.72, h:.07, seats:8, label:'' },
+      { type:'rect', x:.5, y:.78, w:.72, h:.07, seats:8, label:'' },
+    ],
+    special:[
+      { x:.88, y:.15, emoji:'🎄', sz:30 },
+      { x:.12, y:.85, emoji:'🎁', sz:22 },
+      { x:.88, y:.85, emoji:'🎁', sz:22 },
+    ],
+    decos:  [
+      { x:.12, y:.08, emoji:'❄️' }, { x:.5, y:.04, emoji:'⭐' }, { x:.88, y:.08, emoji:'❄️' },
+    ],
+    door: { side:'top', pos:.5 },
+  },
+  funeral: {
+    zones:  [
+      { x:.04, y:.04, w:.92, h:.54, color:'rgba(180,180,180,.12)', label:'Seating' },
+      { x:.28, y:.64, w:.44, h:.28, color:'rgba(140,140,140,.12)', label:'Service Area' },
+    ],
+    tables: [
+      { type:'rect', x:.5, y:.17, w:.74, h:.055, seats:0 },
+      { type:'rect', x:.5, y:.31, w:.74, h:.055, seats:0 },
+      { type:'rect', x:.5, y:.45, w:.74, h:.055, seats:0 },
+    ],
+    special:[
+      { x:.5,  y:.76, emoji:'🕊️', sz:24, label:'Podium' },
+      { x:.14, y:.76, emoji:'💐', sz:20 },
+      { x:.86, y:.76, emoji:'💐', sz:20 },
+    ],
+    decos:  [
+      { x:.12, y:.08, emoji:'🕯️' }, { x:.88, y:.08, emoji:'🕯️' },
+    ],
+    door: { side:'bottom', pos:.5 },
+  },
+  halloween: {
+    zones:  [
+      { x:.04, y:.04, w:.92, h:.88, color:'rgba(255,80,0,.05)', label:'' },
+      { x:.24, y:.4,  w:.52, h:.36, color:'rgba(100,0,160,.1)', label:'Dance Floor' },
+    ],
+    tables: [
+      { type:'round', x:.15, y:.2,  r:.08, seats:4 },
+      { type:'round', x:.85, y:.2,  r:.08, seats:4 },
+      { type:'round', x:.15, y:.72, r:.08, seats:4 },
+      { type:'round', x:.85, y:.72, r:.08, seats:4 },
+    ],
+    special:[
+      { x:.5, y:.58, emoji:'🎃', sz:30 },
+      { x:.5, y:.05, emoji:'🕷️', sz:16 },
+    ],
+    decos:  [
+      { x:.05, y:.05, emoji:'🦇' }, { x:.95, y:.05, emoji:'🦇' },
+      { x:.05, y:.95, emoji:'👻' }, { x:.95, y:.95, emoji:'👻' },
+    ],
+    door: { side:'top', pos:.5 },
+  },
+  graduation: {
+    zones:  [
+      { x:.04, y:.04, w:.92, h:.28, color:'rgba(37,99,235,.15)', label:'Stage' },
+      { x:.05, y:.36, w:.9,  h:.58, color:'rgba(219,234,254,.3)', label:'Seating' },
+    ],
+    tables: [
+      { type:'rect', x:.5, y:.48, w:.74, h:.05, seats:0 },
+      { type:'rect', x:.5, y:.59, w:.74, h:.05, seats:0 },
+      { type:'rect', x:.5, y:.7,  w:.74, h:.05, seats:0 },
+      { type:'rect', x:.5, y:.81, w:.74, h:.05, seats:0 },
+    ],
+    special:[
+      { x:.5,  y:.16, emoji:'🎓', sz:26, label:'Podium' },
+      { x:.15, y:.16, emoji:'🏆', sz:20 },
+      { x:.85, y:.16, emoji:'🏆', sz:20 },
+    ],
+    decos:  [
+      { x:.05, y:.05, emoji:'⭐' }, { x:.5, y:.05, emoji:'🎊' }, { x:.95, y:.05, emoji:'⭐' },
+    ],
+    door: { side:'bottom', pos:.5 },
+  },
+  wedding: {
+    zones:  [
+      { x:.04, y:.04, w:.92, h:.26, color:'rgba(212,175,55,.2)',  label:'Altar' },
+      { x:.04, y:.34, w:.44, h:.6,  color:'rgba(255,248,180,.18)', label:'Bride Side' },
+      { x:.52, y:.34, w:.44, h:.6,  color:'rgba(255,248,180,.18)', label:'Groom Side' },
+    ],
+    tables: [
+      { type:'rect', x:.22, y:.47, w:.38, h:.048, seats:0 },
+      { type:'rect', x:.22, y:.58, w:.38, h:.048, seats:0 },
+      { type:'rect', x:.22, y:.69, w:.38, h:.048, seats:0 },
+      { type:'rect', x:.22, y:.8,  w:.38, h:.048, seats:0 },
+      { type:'rect', x:.78, y:.47, w:.38, h:.048, seats:0 },
+      { type:'rect', x:.78, y:.58, w:.38, h:.048, seats:0 },
+      { type:'rect', x:.78, y:.69, w:.38, h:.048, seats:0 },
+      { type:'rect', x:.78, y:.8,  w:.38, h:.048, seats:0 },
+    ],
+    special:[
+      { x:.5,  y:.14, emoji:'💒', sz:28 },
+      { x:.14, y:.14, emoji:'💐', sz:20 },
+      { x:.86, y:.14, emoji:'💐', sz:20 },
+    ],
+    decos:  [
+      { x:.5, y:.42, emoji:'🌹' }, { x:.5, y:.57, emoji:'🌹' }, { x:.5, y:.72, emoji:'🌹' },
+    ],
+    door: { side:'bottom', pos:.5 },
+  },
+  anniversary: {
+    zones:  [{ x:.06, y:.06, w:.88, h:.88, color:'rgba(236,72,153,.07)', label:'Dining' }],
+    tables: [
+      { type:'round', x:.26, y:.3,  r:.09, seats:2 },
+      { type:'round', x:.74, y:.3,  r:.09, seats:2 },
+      { type:'round', x:.26, y:.7,  r:.09, seats:2 },
+      { type:'round', x:.74, y:.7,  r:.09, seats:2 },
+      { type:'round', x:.5,  y:.5,  r:.10, seats:4 },
+    ],
+    special:[
+      { x:.06, y:.5, emoji:'🕯️', sz:18 }, { x:.94, y:.5, emoji:'🕯️', sz:18 },
+    ],
+    decos:  [
+      { x:.06, y:.06, emoji:'💖' }, { x:.94, y:.06, emoji:'💖' },
+      { x:.06, y:.94, emoji:'🌹' }, { x:.94, y:.94, emoji:'🌹' },
+      { x:.5,  y:.06, emoji:'💖' },
+    ],
+    door: { side:'bottom', pos:.5 },
+  },
+  other: {
+    zones:  [
+      { x:.04, y:.04, w:.92, h:.44, color:'rgba(109,40,217,.1)', label:'Dining Area' },
+      { x:.18, y:.52, w:.64, h:.35, color:'rgba(167,139,250,.15)', label:'Dance Floor' },
+    ],
+    tables: [
+      { type:'round', x:.2,  y:.23, r:.085, seats:6 },
+      { type:'round', x:.5,  y:.23, r:.085, seats:6 },
+      { type:'round', x:.8,  y:.23, r:.085, seats:6 },
+      { type:'rect',  x:.87, y:.66, w:.22,  h:.26, label:'DJ Booth' },
+      { type:'rect',  x:.5,  y:.92, w:.52,  h:.065, label:'Bar' },
+    ],
+    special:[{ x:.5, y:.69, emoji:'🎵', sz:22 }],
+    decos:  [
+      { x:.05, y:.05, emoji:'🎉' }, { x:.95, y:.05, emoji:'🎊' },
+      { x:.05, y:.95, emoji:'🎈' }, { x:.95, y:.95, emoji:'🎈' },
+    ],
+    door: { side:'bottom', pos:.5 },
+  },
+};
+
+// ── Top-down guest actor ─────────────────────────────────────
 class Actor {
-  constructor(name, canvas) {
-    this.name = name;
-    this.r    = 22;
-    this.x    = this.r + Math.random() * (canvas.width  - this.r * 2);
-    this.y    = canvas.height * 0.48 + Math.random() * (canvas.height * 0.28);
-    this.vx   = (Math.random() - 0.5) * 1.4;
-    this.vy   = (Math.random() - 0.5) * 0.7;
-    this.hue  = Math.random() * 360;
-    this.bob  = Math.random() * Math.PI * 2;
+  constructor(name, ix, iy, iw, ih, obstacles) {
+    this.name      = name;
+    this.r         = 11;
+    this.hue       = Math.random() * 360;
+    this.obstacles = obstacles;
+    // start somewhere walkable
+    this._bounds   = { ix, iy, iw, ih };
+    this.x  = ix + 0.1 * iw + Math.random() * iw * 0.8;
+    this.y  = iy + 0.1 * ih + Math.random() * ih * 0.8;
+    this.vx = (Math.random() - 0.5) * 0.9;
+    this.vy = (Math.random() - 0.5) * 0.9;
   }
-  update(canvas, t) {
-    this.x += this.vx;
-    this.y += this.vy + Math.sin(t * 0.025 + this.bob) * 0.3;
-    const minY = canvas.height * 0.46, maxY = canvas.height * 0.76;
-    if (this.x < this.r || this.x > canvas.width - this.r) this.vx *= -1;
-    if (this.y < minY   || this.y > maxY)                  this.vy *= -1;
-    this.x = Math.max(this.r, Math.min(canvas.width - this.r, this.x));
-    this.y = Math.max(minY, Math.min(maxY, this.y));
-    if (Math.random() < 0.006) { this.vx = (Math.random() - 0.5) * 1.4; this.vy = (Math.random() - 0.5) * 0.7; }
+
+  update() {
+    const { ix, iy, iw, ih } = this._bounds;
+    let nx = this.x + this.vx;
+    let ny = this.y + this.vy;
+
+    // Wall bounce
+    if (nx < ix + this.r || nx > ix + iw - this.r) { this.vx *= -1; nx = this.x; }
+    if (ny < iy + this.r || ny > iy + ih - this.r) { this.vy *= -1; ny = this.y; }
+
+    // Obstacle (table) repulsion
+    for (const obs of this.obstacles) {
+      const dx = nx - obs.x, dy = ny - obs.y;
+      const d  = Math.sqrt(dx * dx + dy * dy);
+      const minD = obs.r + this.r + 3;
+      if (d < minD && d > 0) {
+        this.vx += (dx / d) * 0.6;
+        this.vy += (dy / d) * 0.6;
+        const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
+        if (spd > 1.1) { this.vx = (this.vx / spd) * 1.1; this.vy = (this.vy / spd) * 1.1; }
+        nx = this.x; ny = this.y;
+      }
+    }
+
+    this.x = Math.max(ix + this.r, Math.min(ix + iw - this.r, nx));
+    this.y = Math.max(iy + this.r, Math.min(iy + ih - this.r, ny));
+
+    if (Math.random() < 0.007) {
+      this.vx = (Math.random() - 0.5) * 0.9;
+      this.vy = (Math.random() - 0.5) * 0.9;
+    }
   }
+
   draw(ctx) {
-    // shadow
-    ctx.beginPath(); ctx.ellipse(this.x, this.y + this.r + 4, this.r * 0.75, 7, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.13)'; ctx.fill();
-    // body
-    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
-    ctx.fillStyle = `hsl(${this.hue},68%,58%)`; ctx.fill();
-    ctx.strokeStyle = 'white'; ctx.lineWidth = 2.5; ctx.stroke();
-    // initials
-    ctx.fillStyle = 'white'; ctx.font = 'bold 12px sans-serif';
+    const { x, y, r } = this;
+    // Drop shadow
+    ctx.beginPath(); ctx.arc(x + 2.5, y + 3, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)'; ctx.fill();
+    // Body
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `hsl(${this.hue},62%,52%)`; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 1.8; ctx.stroke();
+    // Initials
+    ctx.fillStyle = 'white'; ctx.font = 'bold 7px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(getInitials(this.name), this.x, this.y);
+    ctx.fillText(getInitials(this.name), x, y);
   }
 }
 
-// Floating particle (confetti / snow / hearts / petals / bats)
-class Particle {
-  constructor(canvas, type) {
-    this.type = type;
-    this.canvas = canvas;
+// ── Venue drawing helpers ────────────────────────────────────
+function simShadow(ctx, fn) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.18)';
+  ctx.shadowBlur  = 6;
+  ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 3;
+  fn();
+  ctx.restore();
+}
+
+function drawVenueFloor(ctx, W, H, pad, theme) {
+  const ix = pad, iy = pad, iw = W - pad * 2, ih = H - pad * 2;
+  ctx.fillStyle = theme.floor;
+  ctx.fillRect(ix, iy, iw, ih);
+  // tile grid
+  const ts = Math.max(20, Math.floor(iw / 14));
+  ctx.strokeStyle = theme.tile; ctx.lineWidth = 0.6;
+  for (let x = ix; x <= ix + iw; x += ts) {
+    ctx.beginPath(); ctx.moveTo(x, iy); ctx.lineTo(x, iy + ih); ctx.stroke();
+  }
+  for (let y = iy; y <= iy + ih; y += ts) {
+    ctx.beginPath(); ctx.moveTo(ix, y); ctx.lineTo(ix + iw, y); ctx.stroke();
+  }
+}
+
+function drawVenueWalls(ctx, W, H, pad, theme, door) {
+  const wallColor = theme.wall;
+  // four wall slabs
+  ctx.fillStyle = wallColor;
+  [[0, 0, W, pad], [0, H - pad, W, pad], [0, 0, pad, H], [W - pad, 0, pad, H]]
+    .forEach(([x, y, w, h]) => ctx.fillRect(x, y, w, h));
+
+  // cut door opening
+  const dw = Math.max(30, W * 0.1);
+  const { side, pos } = door;
+  ctx.fillStyle = theme.floor;
+  if (side === 'bottom') {
+    ctx.fillRect(W * pos - dw / 2, H - pad, dw, pad);
+    ctx.fillStyle = '#D0B898';
+    ctx.fillRect(W * pos - dw / 2, H - pad, dw, 3);
+    ctx.fillRect(W * pos - dw / 2, H - 3, dw, 3);
+  } else if (side === 'top') {
+    ctx.fillRect(W * pos - dw / 2, 0, dw, pad);
+    ctx.fillStyle = '#D0B898';
+    ctx.fillRect(W * pos - dw / 2, pad - 3, dw, 3);
+    ctx.fillRect(W * pos - dw / 2, 0, dw, 3);
+  }
+
+  // inner wall edge (lighter line)
+  ctx.strokeStyle = theme.wallEdge; ctx.lineWidth = 2;
+  ctx.strokeRect(pad, pad, W - pad * 2, H - pad * 2);
+
+  // baseboard shadow on floor
+  const grad = ctx.createLinearGradient(pad, pad, pad + 12, pad);
+  grad.addColorStop(0, 'rgba(0,0,0,0.1)'); grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad; ctx.fillRect(pad, pad, 12, H - pad * 2);
+  const gradT = ctx.createLinearGradient(0, pad, 0, pad + 12);
+  gradT.addColorStop(0, 'rgba(0,0,0,0.1)'); gradT.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gradT; ctx.fillRect(pad, pad, W - pad * 2, 12);
+}
+
+function drawZoneArea(ctx, zone, ix, iy, iw, ih) {
+  const x = ix + zone.x * iw, y = iy + zone.y * ih;
+  const w = zone.w * iw,       h = zone.h * ih;
+  ctx.fillStyle = zone.color;
+  ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.lineWidth = 1; ctx.stroke();
+  if (zone.label) {
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.font = `bold ${Math.max(9, Math.floor(Math.min(w, h) * 0.13))}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(zone.label.toUpperCase(), x + w / 2, y + h / 2);
+  }
+}
+
+function drawRoundTable(ctx, t, ix, iy, iw, ih, theme) {
+  const cx = ix + t.x * iw, cy = iy + t.y * ih, r = t.r * Math.min(iw, ih);
+  const seats = t.seats || 0;
+  const cw = 12, ch = 8; // chair dimensions
+
+  // chairs first (behind table)
+  for (let i = 0; i < seats; i++) {
+    const a   = (i / seats) * Math.PI * 2 - Math.PI / 2;
+    const cx2 = cx + Math.cos(a) * (r + 9);
+    const cy2 = cy + Math.sin(a) * (r + 9);
+    ctx.save(); ctx.translate(cx2, cy2); ctx.rotate(a + Math.PI / 2);
+    ctx.beginPath(); ctx.roundRect(-cw / 2, -ch / 2, cw, ch, 3);
+    ctx.fillStyle = theme.chair; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.14)'; ctx.lineWidth = 0.5; ctx.stroke();
+    ctx.restore();
+  }
+
+  // table shadow + surface
+  simShadow(ctx, () => {
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = theme.table; ctx.fill();
+  });
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+  // wood grain ring
+  ctx.beginPath(); ctx.arc(cx, cy, r * 0.45, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 1; ctx.stroke();
+
+  return { x: cx, y: cy, r: r + 9 }; // obstacle radius includes chairs
+}
+
+function drawRectTable(ctx, t, ix, iy, iw, ih, theme) {
+  const tw = t.w * iw, th = t.h * ih;
+  const tx = ix + t.x * iw - tw / 2, ty = iy + t.y * ih - th / 2;
+  const cw = 13, ch = 8;
+
+  // chairs on long sides (top & bottom)
+  const n = Math.max(1, Math.round(tw / 32));
+  for (let i = 0; i < n; i++) {
+    const cx = tx + (i + 0.5) * (tw / n);
+    // top
+    ctx.save(); ctx.translate(cx, ty - 6);
+    ctx.beginPath(); ctx.roundRect(-cw / 2, -ch, cw, ch, 3);
+    ctx.fillStyle = theme.chair; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 0.5; ctx.stroke();
+    ctx.restore();
+    // bottom
+    ctx.save(); ctx.translate(cx, ty + th + 6);
+    ctx.beginPath(); ctx.roundRect(-cw / 2, 0, cw, ch, 3);
+    ctx.fillStyle = theme.chair; ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)'; ctx.lineWidth = 0.5; ctx.stroke();
+    ctx.restore();
+  }
+
+  simShadow(ctx, () => {
+    ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, 4);
+    ctx.fillStyle = theme.table; ctx.fill();
+  });
+  ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.roundRect(tx, ty, tw, th, 4); ctx.stroke();
+  if (t.label) {
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.font = `bold ${Math.min(11, Math.floor(tw * 0.09))}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(t.label, tx + tw / 2, ty + th / 2);
+  }
+
+  const obstR = Math.max(tw, th) / 2 + 10;
+  return { x: tx + tw / 2, y: ty + th / 2, r: obstR };
+}
+
+function drawSpecialItem(ctx, s, ix, iy, iw, ih) {
+  const cx = ix + s.x * iw, cy = iy + s.y * ih, sz = s.sz || 24;
+  // soft halo
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, sz * 0.9);
+  g.addColorStop(0, 'rgba(255,255,255,0.55)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.beginPath(); ctx.arc(cx, cy, sz * 0.9, 0, Math.PI * 2);
+  ctx.fillStyle = g; ctx.fill();
+  ctx.font = `${sz}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(s.emoji, cx, cy);
+  if (s.label) {
+    ctx.fillStyle = 'rgba(0,0,0,0.38)';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillText(s.label, cx, cy + sz * 0.72);
+  }
+}
+
+function drawDecoItem(ctx, d, ix, iy, iw, ih, t) {
+  const cx = ix + d.x * iw, cy = iy + d.y * ih;
+  const bob = Math.sin(t * 0.04 + d.x * 13) * 3;
+  ctx.font = '17px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(d.emoji, cx, cy + bob);
+}
+
+// ── Simulator floating particles (top-down overlay) ──────────
+class SimParticle {
+  constructor(W, H, type) {
+    this.W = W; this.H = H; this.type = type;
     this.reset(true);
   }
-  reset(randomY = false) {
-    this.x  = Math.random() * this.canvas.width;
-    this.y  = randomY ? Math.random() * this.canvas.height : -20;
-    this.vx = (Math.random() - 0.5) * 1.8;
-    this.vy = this.type === 'bats' ? (Math.random() - 0.5) * 1.2 : Math.random() * 1.8 + 0.8;
+  reset(scatter = false) {
+    this.x   = Math.random() * this.W;
+    this.y   = scatter ? Math.random() * this.H : -15;
+    this.vx  = (Math.random() - 0.5) * (this.type === 'bats' ? 2 : 0.8);
+    this.vy  = this.type === 'bats' ? (Math.random() - 0.5) * 1.2 : Math.random() * 1.1 + 0.4;
     this.rot = Math.random() * Math.PI * 2;
-    this.rs  = (Math.random() - 0.5) * 0.12;
-    this.sz  = Math.random() * 7 + 4;
+    this.rs  = (Math.random() - 0.5) * 0.08;
+    this.sz  = Math.random() * 5 + 4;
     this.hue = Math.random() * 360;
-    this.op  = 0.7 + Math.random() * 0.3;
+    this.op  = 0.55 + Math.random() * 0.3;
+    if (this.type === 'bats') {
+      const left = Math.random() < 0.5;
+      this.x  = scatter ? this.x : (left ? -20 : this.W + 20);
+      this.vx = left ? Math.random() * 2 + 1 : -(Math.random() * 2 + 1);
+      this.vy = (Math.random() - 0.5) * 1.2;
+      this.sz = Math.random() * 10 + 14;
+    }
   }
   update() {
-    this.x   += this.vx;
-    this.y   += this.vy;
-    this.rot += this.rs;
-    if (this.y > this.canvas.height + 20) this.reset();
-    if (this.x < -20 || this.x > this.canvas.width + 20) this.reset();
+    this.x += this.vx; this.y += this.vy; this.rot += this.rs;
+    const gone = this.type === 'bats'
+      ? (this.x < -30 || this.x > this.W + 30)
+      : this.y > this.H + 20;
+    if (gone) this.reset(false);
   }
   draw(ctx) {
     ctx.save();
-    ctx.translate(this.x, this.y);
-    ctx.rotate(this.rot);
+    ctx.translate(this.x, this.y); ctx.rotate(this.rot);
     ctx.globalAlpha = this.op;
-    if (this.type === 'confetti') {
+    const { type, sz } = this;
+    if (type === 'confetti') {
       ctx.fillStyle = `hsl(${this.hue},80%,60%)`;
-      ctx.fillRect(-this.sz / 2, -this.sz / 4, this.sz, this.sz / 2);
-    } else if (this.type === 'snow') {
-      ctx.beginPath(); ctx.arc(0, 0, this.sz / 2, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fill();
+      ctx.fillRect(-sz / 2, -sz / 4, sz, sz / 2);
+    } else if (type === 'snow') {
+      ctx.beginPath(); ctx.arc(0, 0, sz / 2, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.88)'; ctx.fill();
     } else {
-      ctx.font = `${this.sz * 2}px sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      const glyphs = { hearts: '❤️', petals: '🌸', bats: '🦇' };
-      ctx.fillText(glyphs[this.type] || '✨', 0, 0);
+      const g = { hearts:'❤️', petals:'🌸', bats:'🦇' };
+      ctx.font = `${sz}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(g[type] || '✨', 0, 0);
     }
     ctx.restore(); ctx.globalAlpha = 1;
   }
 }
 
-let actors = [], particles = [], simCanvas, simCtx;
+let actors = [], simParticles = [], simCanvas, simCtx;
 
 function setupSimulator() {
   const ev  = getCurrentEvent(); if (!ev) return;
-  const c   = CAT[ev.category] || CAT.other;
-  const sc  = SCENE[ev.category] || SCENE.other;
+  const c   = CAT[ev.category]     || CAT.other;
+  const th  = VENUE_THEME[ev.category]  || VENUE_THEME.other;
+  const lay = VENUE_LAYOUT[ev.category] || VENUE_LAYOUT.other;
   const dt  = ev.date ? new Date(ev.date + 'T00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' }) : 'TBD';
-  const acts = [...(ev.activities||[])].sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+  const acts   = [...(ev.activities || [])].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
   const guests = ev.guests || [];
   const coming = guests.filter(g => g.rsvp === 'yes').length;
 
@@ -705,7 +1141,7 @@ function setupSimulator() {
     ${ev.location ? `<p>📍 ${escHtml(ev.location)}</p>` : ''}
     ${ev.theme    ? `<p>✨ Theme: ${escHtml(ev.theme)}</p>` : ''}`;
 
-  const bubbles = guests.slice(0,14).map(g =>
+  const bubbles = guests.slice(0, 14).map(g =>
     `<div class="sim-guest-bubble" title="${escHtml(g.name)}">${getInitials(g.name)}</div>`).join('');
   const extra = guests.length > 14
     ? `<div class="sim-guest-bubble more">+${guests.length - 14}</div>` : '';
@@ -723,100 +1159,114 @@ function setupSimulator() {
           ${a.duration ? `<span class="timeline-dur">${a.duration}m</span>` : ''}
         </div>`).join('')}</div>`;
 
-  // ── Canvas
+  // ── Canvas setup
   const wrap = document.querySelector('.simulator-scene-wrap');
   simCanvas  = document.getElementById('sim-canvas');
-  simCanvas.width  = wrap.clientWidth  || 640;
-  simCanvas.height = 360;
+  simCanvas.width  = wrap.clientWidth || 640;
+  simCanvas.height = Math.round(simCanvas.width * 0.6);
   simCtx = simCanvas.getContext('2d');
 
-  // create actors
-  const guestList = guests.length ? guests.slice(0,15) : [{name:'Guest 1'},{name:'Guest 2'},{name:'Guest 3'}];
-  actors = guestList.map(g => new Actor(g.name, simCanvas));
+  const W = simCanvas.width, H = simCanvas.height;
+  const pad = Math.round(Math.min(W, H) * 0.07); // wall thickness
+  const ix = pad, iy = pad, iw = W - pad * 2, ih = H - pad * 2;
 
-  // create particles
-  particles = [];
-  if (sc.particles !== 'none') {
-    for (let i = 0; i < 28; i++) particles.push(new Particle(simCanvas, sc.particles));
+  // Build obstacle list from table positions (absolute px)
+  const obstacles = [];
+  for (const t of lay.tables) {
+    if (t.type === 'round') {
+      const r = t.r * Math.min(iw, ih);
+      obstacles.push({ x: ix + t.x * iw, y: iy + t.y * ih, r: r + 12 });
+    } else {
+      const tw = t.w * iw, th = t.h * ih;
+      const cx = ix + t.x * iw, cy = iy + t.y * ih;
+      obstacles.push({ x: cx, y: cy, r: Math.max(tw, th) / 2 + 12 });
+    }
+  }
+
+  // Create guest actors
+  const gList = guests.length ? guests.slice(0, 16) : [{ name:'Alex' },{ name:'Sam' },{ name:'Jordan' }];
+  actors = gList.map(g => new Actor(g.name, ix, iy, iw, ih, obstacles));
+
+  // Create ambient particles
+  simParticles = [];
+  if (th.particle !== 'none') {
+    const n = th.particle === 'bats' ? 10 : 20;
+    for (let i = 0; i < n; i++) simParticles.push(new SimParticle(W, H, th.particle));
   }
 
   state.simTime = 0;
-  drawFrame(sc, ev, c);
+  drawFrame();
 }
 
-function drawFrame(sc, ev, c) {
+function drawFrame() {
   if (!simCanvas || !simCtx) return;
-  const W = simCanvas.width, H = simCanvas.height, ctx = simCtx, t = state.simTime;
+  const ev  = getCurrentEvent(); if (!ev) return;
+  const c   = CAT[ev.category]          || CAT.other;
+  const th  = VENUE_THEME[ev.category]  || VENUE_THEME.other;
+  const lay = VENUE_LAYOUT[ev.category] || VENUE_LAYOUT.other;
 
-  // ── Background gradient
-  const grad = ctx.createLinearGradient(0, 0, 0, H * 0.78);
-  grad.addColorStop(0,   sc.wallTop);
-  grad.addColorStop(0.6, sc.wallBot);
-  ctx.fillStyle = grad; ctx.fillRect(0, 0, W, H * 0.78);
+  const W = simCanvas.width, H = simCanvas.height, ctx = simCtx;
+  const pad = Math.round(Math.min(W, H) * 0.07);
+  const ix = pad, iy = pad, iw = W - pad * 2, ih = H - pad * 2;
+  const t = state.simTime;
 
-  // ── Floor
-  ctx.fillStyle = sc.floor; ctx.fillRect(0, H * 0.77, W, H * 0.23);
+  // ── 1. outer background (exterior)
+  ctx.fillStyle = '#C8B49A'; ctx.fillRect(0, 0, W, H);
 
-  // ── Floor edge shadow
-  const floorGrad = ctx.createLinearGradient(0, H * 0.77, 0, H * 0.77 + 18);
-  floorGrad.addColorStop(0, 'rgba(0,0,0,0.18)');
-  floorGrad.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = floorGrad; ctx.fillRect(0, H * 0.77, W, 18);
+  // ── 2. floor tiles
+  drawVenueFloor(ctx, W, H, pad, th);
 
-  // ── Hanging decorations
-  const decos = sc.decos;
-  const xPos  = [0.1, 0.25, 0.5, 0.75, 0.9].map(p => W * p);
-  ctx.strokeStyle = 'rgba(0,0,0,0.18)'; ctx.lineWidth = 1;
-  xPos.forEach((x, i) => {
-    const baseY = H * 0.19;
-    const swing = Math.sin(t * 0.022 + i * 1.1) * 5;
-    // string
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + swing * 0.4, baseY - 18); ctx.stroke();
-    // emoji
-    ctx.font = '28px sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(decos[i % decos.length], x + swing * 0.4, baseY + Math.sin(t * 0.03 + i) * 3);
-  });
+  // ── 3. zone areas (dining, dance floor, stage…)
+  for (const zone of lay.zones) drawZoneArea(ctx, zone, ix, iy, iw, ih);
 
-  // ── Event name banner
-  ctx.font = 'bold 17px sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  // ── 4. walls + door cutout
+  drawVenueWalls(ctx, W, H, pad, th, lay.door);
+
+  // ── 5. furniture (chairs drawn inside helper before table top)
+  for (const tbl of lay.tables) {
+    if (tbl.type === 'round') drawRoundTable(ctx, tbl, ix, iy, iw, ih, th);
+    else                      drawRectTable(ctx, tbl, ix, iy, iw, ih, th);
+  }
+
+  // ── 6. special items (cake, podium, DJ…)
+  for (const s of lay.special) drawSpecialItem(ctx, s, ix, iy, iw, ih);
+
+  // ── 7. corner/edge decorations (animated bounce)
+  for (const d of lay.decos) drawDecoItem(ctx, d, ix, iy, iw, ih, t);
+
+  // ── 8. event name label (subtle, bottom-centre of room)
+  ctx.font = `bold ${Math.max(11, Math.floor(iw * 0.028))}px sans-serif`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
   ctx.fillStyle = 'rgba(0,0,0,0.18)';
-  ctx.fillText(`${c.icon} ${ev.name} ${c.icon}`, W / 2 + 1, H * 0.37 + 1);
-  ctx.fillStyle = sc.textColor || 'white';
-  ctx.shadowColor = 'rgba(255,255,255,0.6)'; ctx.shadowBlur = 6;
-  ctx.fillText(`${c.icon} ${ev.name} ${c.icon}`, W / 2, H * 0.37);
-  ctx.shadowBlur = 0;
+  ctx.fillText(`${c.icon} ${ev.name}`, ix + iw / 2, iy + ih - 6);
 
-  // ── Particles
-  particles.forEach(p => { p.update(); p.draw(ctx); });
+  // ── 9. ambient particles (snow/confetti/hearts drifting across floor view)
+  simParticles.forEach(p => { p.update(); p.draw(ctx); });
 
-  // ── Actors
-  actors.forEach(a => { a.update(simCanvas, t); a.draw(ctx); });
+  // ── 10. actors (top-down, with shadow)
+  actors.forEach(a => { a.update(); a.draw(ctx); });
+
+  // ── 11. compass / scale indicator (Google Maps feel)
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath(); ctx.roundRect(W - pad - 36, iy + 6, 36, 18, 4); ctx.fill();
+  ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.font = 'bold 9px sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('FLOOR PLAN', W - pad - 18, iy + 15);
 
   state.simTime++;
   if (state.simRunning) {
-    state.simFrame = requestAnimationFrame(() => {
-      const ev2 = getCurrentEvent();
-      const c2  = CAT[ev2?.category] || CAT.other;
-      const sc2 = SCENE[ev2?.category] || SCENE.other;
-      if (ev2) drawFrame(sc2, ev2, c2);
-    });
+    state.simFrame = requestAnimationFrame(drawFrame);
   }
 }
 
 function toggleSimulator() {
-  const ev = getCurrentEvent(); if (!ev) return;
-  const c  = CAT[ev.category] || CAT.other;
-  const sc = SCENE[ev.category] || SCENE.other;
   const btn = document.getElementById('btn-run-simulator');
-
   if (state.simRunning) {
     stopSimulator();
   } else {
     state.simRunning = true;
     btn.textContent = '⏸ Pause';
-    drawFrame(sc, ev, c);
+    drawFrame();
   }
 }
 
@@ -836,7 +1286,54 @@ function toggleForm(id) {
 // ── Init ────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
-  // Sidebar nav
+  // ── Login form ──────────────────────────────────────────
+  let loginMode = 'signin'; // 'signin' | 'signup'
+
+  function setLoginMode(mode) {
+    loginMode = mode;
+    document.getElementById('tab-signin').classList.toggle('active', mode === 'signin');
+    document.getElementById('tab-signup').classList.toggle('active', mode === 'signup');
+    document.getElementById('confirm-group').style.display = mode === 'signup' ? 'block' : 'none';
+    document.getElementById('login-submit').textContent    = mode === 'signup' ? 'Create Account' : 'Sign In';
+    document.getElementById('login-error').textContent     = '';
+  }
+
+  document.getElementById('tab-signin').addEventListener('click', () => setLoginMode('signin'));
+  document.getElementById('tab-signup').addEventListener('click', () => setLoginMode('signup'));
+
+  document.getElementById('login-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const username  = document.getElementById('login-username').value.trim().toLowerCase();
+    const password  = document.getElementById('login-password').value;
+    const confirm   = document.getElementById('login-confirm').value;
+    const errorEl   = document.getElementById('login-error');
+    const accounts  = getAccounts();
+
+    if (!username || username.length < 2) {
+      errorEl.textContent = 'Username must be at least 2 characters.'; return;
+    }
+    if (!password || password.length < 4) {
+      errorEl.textContent = 'Password must be at least 4 characters.'; return;
+    }
+
+    if (loginMode === 'signup') {
+      if (accounts[username]) { errorEl.textContent = 'Username already taken — try signing in.'; return; }
+      if (password !== confirm) { errorEl.textContent = 'Passwords do not match.'; return; }
+      accounts[username] = password;
+      saveAccounts(accounts);
+      loginUser(username);
+    } else {
+      if (!accounts[username] || accounts[username] !== password) {
+        errorEl.textContent = 'Incorrect username or password.'; return;
+      }
+      loginUser(username);
+    }
+  });
+
+  // Logout
+  document.getElementById('btn-logout').addEventListener('click', logoutUser);
+
+  // ── Sidebar nav ─────────────────────────────────────────
   document.querySelector('.nav-btn[data-view="dashboard"]').addEventListener('click', () => {
     stopSimulator(); showView('dashboard');
   });
@@ -872,8 +1369,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('back-to-dashboard').addEventListener('click', () => { stopSimulator(); showView('dashboard'); });
   document.getElementById('btn-edit-event').addEventListener('click', () => openCreateForm(state.currentEventId));
   document.getElementById('btn-delete-event').addEventListener('click', () => {
-    const id = state.currentEventId;
-    deleteEvent(id);
+    deleteEvent(state.currentEventId);
     showView('dashboard');
   });
 
@@ -901,6 +1397,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Simulator
   document.getElementById('btn-run-simulator').addEventListener('click', toggleSimulator);
 
-  // Boot
-  renderDashboard();
+  // ── Auto-resume saved session ───────────────────────────
+  const saved = localStorage.getItem('pp_session');
+  if (saved && getAccounts()[saved]) {
+    loginUser(saved);
+  }
 });
