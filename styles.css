@@ -791,6 +791,35 @@ body {
 .acc-header:hover  { background: var(--cat-bg, var(--bg)); }
 .activity-accordion.open .acc-header { background: var(--cat-bg, var(--bg)); }
 
+/* drag handle */
+.drag-handle {
+  font-size: 20px;
+  color: var(--text-2);
+  cursor: grab;
+  padding: 0 2px;
+  flex-shrink: 0;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+  line-height: 1;
+  user-select: none;
+}
+.acc-header:hover .drag-handle { opacity: 0.85; }
+.drag-handle:active { cursor: grabbing; }
+
+/* item being dragged */
+.activity-accordion.dragging {
+  opacity: 0.35;
+  border-style: dashed !important;
+}
+
+/* drop-position indicators */
+.activity-accordion.drag-over-top {
+  border-top: 3px solid var(--cat-color, var(--primary)) !important;
+}
+.activity-accordion.drag-over-bot {
+  border-bottom: 3px solid var(--cat-color, var(--primary)) !important;
+}
+
 .acc-time {
   font-size: 13px;
   font-weight: 800;

@@ -335,9 +335,11 @@ function addGuest() {
 }
 
 // ── Activities ──────────────────────────────────────────────
+let _dragSrcId = null;
+
 function renderActivities() {
   const ev   = getCurrentEvent(); if (!ev) return;
-  const acts = [...(ev.activities || [])].sort((a, b) => (a.time||'').localeCompare(b.time||''));
+  const acts = ev.activities || [];   // keep user's drag order — no auto-sort
   const list = document.getElementById('activity-list');
 
   if (!acts.length) {
@@ -346,8 +348,9 @@ function renderActivities() {
   }
 
   list.innerHTML = acts.map(a => `
-    <div class="activity-accordion" data-aid="${a.id}">
+    <div class="activity-accordion" data-aid="${a.id}" draggable="true">
       <button class="acc-header" aria-expanded="false">
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
         <span class="acc-time">${a.time || '??:??'}</span>
         <span class="acc-name">${escHtml(a.name)}</span>
         ${a.duration ? `<span class="acc-chip">⏱ ${a.duration} min</span>` : ''}
@@ -363,20 +366,77 @@ function renderActivities() {
       </div>
     </div>`).join('');
 
-  // Toggle open/close on header click
+  // ── Accordion toggle (skip if click started on drag handle)
   list.querySelectorAll('.acc-header').forEach(header => {
-    header.addEventListener('click', () => {
+    header.addEventListener('click', e => {
+      if (e.target.closest('.drag-handle')) return;
       const card = header.closest('.activity-accordion');
       const isOpen = card.classList.toggle('open');
       header.setAttribute('aria-expanded', isOpen);
     });
   });
 
+  // ── Delete
   list.querySelectorAll('.btn-rm-activity').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       ev.activities = ev.activities.filter(a => a.id !== btn.dataset.aid);
       saveState(); renderActivities();
+    });
+  });
+
+  // ── Drag-and-drop reordering
+  list.querySelectorAll('.activity-accordion').forEach(card => {
+
+    card.addEventListener('dragstart', e => {
+      _dragSrcId = card.dataset.aid;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', _dragSrcId);
+      // slight delay so the ghost image renders before the style change
+      setTimeout(() => card.classList.add('dragging'), 0);
+    });
+
+    card.addEventListener('dragend', () => {
+      card.classList.remove('dragging');
+      list.querySelectorAll('.drag-over-top, .drag-over-bot')
+          .forEach(c => c.classList.remove('drag-over-top', 'drag-over-bot'));
+    });
+
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // show indicator above or below based on cursor position
+      const rect   = card.getBoundingClientRect();
+      const midY   = rect.top + rect.height / 2;
+      const above  = e.clientY < midY;
+      list.querySelectorAll('.drag-over-top, .drag-over-bot')
+          .forEach(c => c.classList.remove('drag-over-top', 'drag-over-bot'));
+      card.classList.add(above ? 'drag-over-top' : 'drag-over-bot');
+    });
+
+    card.addEventListener('dragleave', () => {
+      card.classList.remove('drag-over-top', 'drag-over-bot');
+    });
+
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      card.classList.remove('drag-over-top', 'drag-over-bot');
+      const targetId = card.dataset.aid;
+      if (!_dragSrcId || _dragSrcId === targetId) return;
+
+      const rect  = card.getBoundingClientRect();
+      const above = e.clientY < rect.top + rect.height / 2;
+
+      const srcIdx = ev.activities.findIndex(a => a.id === _dragSrcId);
+      let   tgtIdx = ev.activities.findIndex(a => a.id === targetId);
+      if (srcIdx === -1 || tgtIdx === -1) return;
+
+      const [moved] = ev.activities.splice(srcIdx, 1);
+      // recalculate target after removal
+      tgtIdx = ev.activities.findIndex(a => a.id === targetId);
+      ev.activities.splice(above ? tgtIdx : tgtIdx + 1, 0, moved);
+      saveState();
+      renderActivities();
     });
   });
 }
