@@ -348,16 +348,17 @@ function renderActivities() {
   list.innerHTML = acts.map(a => `
     <div class="activity-accordion" data-aid="${a.id}">
       <button class="acc-header" aria-expanded="false">
-        <span class="acc-time">${a.time || '--:--'}</span>
+        <span class="acc-time">${a.time || '??:??'}</span>
         <span class="acc-name">${escHtml(a.name)}</span>
         ${a.duration ? `<span class="acc-chip">⏱ ${a.duration} min</span>` : ''}
         <span class="acc-chevron">▾</span>
       </button>
       <div class="acc-body">
-        <div class="acc-separator"></div>
-        <p class="acc-desc${a.description ? '' : ' muted'}">${escHtml(a.description || 'No description added.')}</p>
-        <div class="acc-foot">
-          <button class="btn btn-danger btn-sm btn-rm-activity" data-aid="${a.id}">Delete</button>
+        <div class="acc-body-inner">
+          <p class="acc-desc${a.description ? '' : ' muted'}">${escHtml(a.description || 'No description added.')}</p>
+          <div class="acc-foot">
+            <button class="btn btn-danger btn-sm btn-rm-activity" data-aid="${a.id}">Delete Activity</button>
+          </div>
         </div>
       </div>
     </div>`).join('');
